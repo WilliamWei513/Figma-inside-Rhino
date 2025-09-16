@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Rhino to Figma Sync</title>
+  <style>
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      margin: 0;
+      padding: 16px;
+      background: #ffffff;
+      color: #333;
+    }
+    
+    .container {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    
+    .header {
+      text-align: center;
+      margin-bottom: 16px;
+    }
+    
+    .header h1 {
+      font-size: 16px;
+      font-weight: 600;
+      margin: 0;
+      color: #333;
+    }
+    
+    .header p {
+      font-size: 12px;
+      color: #666;
+      margin: 4px 0 0 0;
+    }
+    
+    .button {
+      width: 100%;
+      padding: 10px 16px;
+      border: none;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    
+    .button-primary {
+      background: #18a0fb;
+      color: white;
+    }
+    
+    .button-primary:hover {
+      background: #0d8ce8;
+    }
+    
+    .button-primary:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+    
+    .button-secondary {
+      background: #f0f0f0;
+      color: #333;
+    }
+    
+    .button-secondary:hover {
+      background: #e0e0e0;
+    }
+    
+    .button-danger {
+      background: #ff4757;
+      color: white;
+    }
+    
+    .button-danger:hover {
+      background: #ff3742;
+    }
+    
+    .status {
+      padding: 10px 12px;
+      border-radius: 6px;
+      font-size: 11px;
+      text-align: center;
+      margin-top: 8px;
+      line-height: 1.4;
+    }
+    
+    .status-loading {
+      background: #e3f2fd;
+      color: #1976d2;
+    }
+    
+    .status-success {
+      background: #e8f5e8;
+      color: #2e7d32;
+    }
+    
+    .status-error {
+      background: #ffebee;
+      color: #c62828;
+    }
+    
+    .info {
+      background: #f8f9fa;
+      padding: 12px;
+      border-radius: 6px;
+      font-size: 11px;
+      color: #666;
+      line-height: 1.4;
+      border-left: 3px solid #18a0fb;
+    }
+    
+    .icon {
+      width: 16px;
+      height: 16px;
+    }
+    
+    .server-status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 11px;
+      color: #666;
+      margin-bottom: 8px;
+    }
+    
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #ccc;
+    }
+    
+    .status-dot.online {
+      background: #4caf50;
+    }
+    
+    .status-dot.offline {
+      background: #f44336;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>🦏 Rhino Sync</h1>
+      <p>从 Rhino 同步几何体到 Figma</p>
+    </div>
+    
+    <div class="server-status">
+      <div id="status-dot" class="status-dot"></div>
+      <span id="server-status-text">检查服务器状态...</span>
+    </div>
+    
+    <button id="load-data" class="button button-primary">
+      <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
+      </svg>
+      加载 Rhino 数据
+    </button>
+    
+    <button id="clear-canvas" class="button button-secondary">
+      <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+      </svg>
+      清空画布
+    </button>
+    
+    <div id="status" class="status" style="display: none;"></div>
+    
+    <div class="info">
+      <strong>使用说明：</strong><br>
+      1. 确保 Rhino 服务器正在运行 (localhost:4000)<br>
+      2. 点击"加载 Rhino 数据"同步几何体<br>
+      3. 几何体会自动添加到当前页面
+    </div>
+    
+    <button id="close-plugin" class="button button-secondary">
+      关闭插件
+    </button>
+  </div>
+
+  <script>
+    // UI 交互逻辑
+    const loadButton = document.getElementById('load-data');
+    const clearButton = document.getElementById('clear-canvas');
+    const closeButton = document.getElementById('close-plugin');
+    const statusDiv = document.getElementById('status');
+    const statusDot = document.getElementById('status-dot');
+    const serverStatusText = document.getElementById('server-status-text');
+
+    // 检查服务器状态
+    async function checkServerStatus() {
+      try {
+        const response = await fetch('http://localhost:4000/figma-ready.json', {
+          method: 'HEAD',
+          timeout: 3000
+        });
+        
+        if (response.ok) {
+          statusDot.className = 'status-dot online';
+          serverStatusText.textContent = '服务器在线';
+          loadButton.disabled = false;
+        } else {
+          statusDot.className = 'status-dot offline';
+          serverStatusText.textContent = '服务器响应异常';
+          loadButton.disabled = true;
+        }
+      } catch (error) {
+        statusDot.className = 'status-dot offline';
+        serverStatusText.textContent = '服务器离线';
+        loadButton.disabled = true;
+      }
+    }
+
+    // 显示状态消息
+    function showStatus(message, type) {
+      statusDiv.textContent = message;
+      statusDiv.className = `status status-${type}`;
+      statusDiv.style.display = 'block';
+      
+      // 3秒后隐藏成功消息
+      if (type === 'success') {
+        setTimeout(() => {
+          statusDiv.style.display = 'none';
+        }, 3000);
+      }
+    }
+
+    // 加载数据按钮
+    loadButton.addEventListener('click', () => {
+      parent.postMessage({ pluginMessage: { type: 'load-rhino-data' } }, '*');
+    });
+
+    // 清空画布按钮
+    clearButton.addEventListener('click', () => {
+      parent.postMessage({ pluginMessage: { type: 'clear-canvas' } }, '*');
+    });
+
+    // 关闭插件按钮
+    closeButton.addEventListener('click', () => {
+      parent.postMessage({ pluginMessage: { type: 'close-plugin' } }, '*');
+    });
+
+    // 监听来自主代码的消息
+    window.onmessage = (event) => {
+      const msg = event.data.pluginMessage;
+      if (msg) {
+        switch (msg.type) {
+          case 'loading':
+            showStatus(msg.message, 'loading');
+            break;
+          case 'success':
+            showStatus(msg.message, 'success');
+            break;
+          case 'error':
+            showStatus(msg.message, 'error');
+            break;
+        }
+      }
+    };
+
+    // 页面加载时检查服务器状态
+    window.onload = function() {
+      checkServerStatus();
+      // 每30秒检查一次服务器状态
+      setInterval(checkServerStatus, 30000);
+    };
+  </script>
+</body>
+</html>
