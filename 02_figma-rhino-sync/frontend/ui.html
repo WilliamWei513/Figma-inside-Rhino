@@ -199,12 +199,13 @@
     // 检查服务器状态
     async function checkServerStatus() {
       try {
-        const response = await fetch('http://localhost:4000/figma-ready.json', {
-          method: 'HEAD',
+        const response = await fetch('http://localhost:4000/health', {
+          method: 'GET',
           timeout: 3000
         });
         
         if (response.ok) {
+          const data = await response.json();
           statusDot.className = 'status-dot online';
           serverStatusText.textContent = '服务器在线';
           loadButton.disabled = false;
@@ -217,6 +218,7 @@
         statusDot.className = 'status-dot offline';
         serverStatusText.textContent = '服务器离线';
         loadButton.disabled = true;
+        console.error('服务器连接错误:', error);
       }
     }
 

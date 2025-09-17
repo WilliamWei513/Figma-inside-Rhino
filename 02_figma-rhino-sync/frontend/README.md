@@ -17,6 +17,22 @@ npm start
 1. 打开 **Figma Desktop** 应用（注意：必须是桌面版，网页版不支持开发插件）
 2. 进入 **Plugins** → **Development** → **Import plugin from manifest...**
 3. 选择 `02_figma-rhino-sync/frontend/manifest.json` 文件
+
+> ⚠️ 如果你在导入插件时看到如下报错：
+>
+> ```
+> Manifest error: Invalid value for networkAccess. If you want to allow localhost, please add a "reasoning" field to the networkAccess object. If you only need to access localhost for development, please add a "devAllowedDomains" field instead.
+> ```
+>
+> 这是因为 Figma 新版 manifest 需要在 `manifest.json` 里为本地网络访问添加说明。  
+> **解决方法：**
+> 1. 打开 `02_figma-rhino-sync/frontend/manifest.json`
+> 2. 在 `networkAccess` 字段下添加如下内容（如果只需要开发时访问 localhost）：
+>    ```json
+>    "devAllowedDomains": ["http://localhost:4000"]
+>    ```
+>    如果已经有 `networkAccess` 字段，请确保它包含 `reasoning` 字段，或只用 `devAllowedDomains` 即可。
+> 3. 保存后重新导入插件
 4. 插件会出现在你的开发插件列表中
 
 ### 3. 运行插件

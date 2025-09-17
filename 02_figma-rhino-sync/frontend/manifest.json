@@ -11,7 +11,9 @@
   ],
   "networkAccess": {
     "allowedDomains": [
-      "localhost"
-    ]
+      "http://localhost"
+    ],
+    "devAllowedDomains": ["http://localhost:4000"],
+    "reasoning": "This plugin needs to connect to a local Rhino server for real-time geometry synchronization between Rhino 3D and Figma design environment."
   }
 }
