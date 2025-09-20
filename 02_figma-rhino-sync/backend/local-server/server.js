@@ -103,7 +103,11 @@ watcher
         pagesCount: fileData.document?.children?.length || 0
       });
 
-      // 转换 Rhino 曲线数据为 Figma 矢量格式
+      // 计算全局包围盒（用于放置时的全局Y翻转）
+      const allY = payload.flatMap(c => (c.points || []).map(p => p[1]));
+      const globalMaxY = allY.length ? Math.max(...allY) : 0;
+
+      // 转换 Rhino 曲线数据为 Figma 矢量格式（翻转路径Y并按全局包围盒翻转放置Y）
       const convertedShapes = payload.map((curve, index) => {
         if (curve.type === "curve" && curve.points) {
           // 计算边界框
@@ -113,22 +117,39 @@ watcher
           const maxX = Math.max(...xCoords);
           const minY = Math.min(...yCoords);
           const maxY = Math.max(...yCoords);
+          const height = maxY - minY;
           
-          // 创建矢量路径数据
-          const pathData = curve.points.map((point, i) => {
-            const x = point[0] - minX; // 相对坐标
-            const y = point[1] - minY;
-            return i === 0 ? `M ${x} ${y}` : `L ${x} ${y}`;
-          }).join(' ');
+          // 创建矢量路径数据（在转换后的局部坐标系中判断闭合并强制闭合）
+          const localPoints = curve.points.map((p) => ({
+            x: p[0] - minX,
+            y: (maxY - p[1])
+          }));
+          const tol = 1e-2; // 像素级容差
+          const isClosedByPoints = localPoints.length > 1 && Math.hypot(
+            localPoints[localPoints.length - 1].x - localPoints[0].x,
+            localPoints[localPoints.length - 1].y - localPoints[0].y
+          ) < tol;
+          const isClosedFlag = curve.closed === true;
+          const shouldClose = isClosedFlag || isClosedByPoints;
+
+          let pathDataCore = '';
+          localPoints.forEach((pt, i) => {
+            pathDataCore += (i === 0 ? `M ${pt.x} ${pt.y}` : ` L ${pt.x} ${pt.y}`);
+          });
+          // 强化闭合：必要时补一条回到起点的线段，并追加 Z
+          const pathData = shouldClose
+            ? `${pathDataCore} Z`
+            : `${pathDataCore}`;
 
           return {
             id: `curve-${index}`,
             name: `Curve ${index + 1}`,
             type: "VECTOR",
             x: minX,
-            y: minY,
+            // 放置位置也按全局包围盒翻转，使整体布局不被上下颠倒
+            y: globalMaxY - maxY,
             width: maxX - minX,
-            height: maxY - minY,
+            height: height,
             fills: [],
             strokes: [{
               type: "SOLID",
@@ -197,7 +218,11 @@ app.get("/figma-ready.json", (req, res) => {
     const data = fs.readFileSync(JSON_PATH, "utf8");
     const payload = JSON.parse(data);
     
-    // 转换 Rhino 曲线数据为 Figma 矢量格式
+    // 计算全局包围盒（用于放置时的全局Y翻转）
+    const allY = payload.flatMap(c => (c.points || []).map(p => p[1]));
+    const globalMaxY = allY.length ? Math.max(...allY) : 0;
+
+    // 转换 Rhino 曲线数据为 Figma 矢量格式（翻转路径Y并按全局包围盒翻转放置Y）
     const convertedShapes = payload.map((curve, index) => {
       if (curve.type === "curve" && curve.points) {
         // 计算边界框
@@ -207,22 +232,39 @@ app.get("/figma-ready.json", (req, res) => {
         const maxX = Math.max(...xCoords);
         const minY = Math.min(...yCoords);
         const maxY = Math.max(...yCoords);
+        const height = maxY - minY;
         
-        // 创建矢量路径数据
-        const pathData = curve.points.map((point, i) => {
-          const x = point[0] - minX; // 相对坐标
-          const y = point[1] - minY;
-          return i === 0 ? `M ${x} ${y}` : `L ${x} ${y}`;
-        }).join(' ');
+        // 创建矢量路径数据（在转换后的局部坐标系中判断闭合并强制闭合）
+        const localPoints = curve.points.map((p) => ({
+          x: p[0] - minX,
+          y: (maxY - p[1])
+        }));
+        const tol = 1e-2; // 像素级容差
+        const isClosedByPoints = localPoints.length > 1 && Math.hypot(
+          localPoints[localPoints.length - 1].x - localPoints[0].x,
+          localPoints[localPoints.length - 1].y - localPoints[0].y
+        ) < tol;
+        const isClosedFlag = curve.closed === true;
+        const shouldClose = isClosedFlag || isClosedByPoints;
+
+        let pathDataCore = '';
+        localPoints.forEach((pt, i) => {
+          pathDataCore += (i === 0 ? `M ${pt.x} ${pt.y}` : ` L ${pt.x} ${pt.y}`);
+        });
+        // 强化闭合：必要时补一条回到起点的线段，并追加 Z
+        const pathData = shouldClose
+          ? `${pathDataCore} Z`
+          : `${pathDataCore}`;
 
         return {
           id: `curve-${index}`,
           name: `Curve ${index + 1}`,
           type: "VECTOR",
           x: minX,
-          y: minY,
+          // 放置位置也按全局包围盒翻转，使整体布局不被上下颠倒
+          y: globalMaxY - maxY,
           width: maxX - minX,
-          height: maxY - minY,
+          height: height,
           fills: [],
           strokes: [{
             type: "SOLID",
