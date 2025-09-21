@@ -103,11 +103,15 @@ watcher
         pagesCount: fileData.document?.children?.length || 0
       });
 
-      // 计算全局包围盒（用于放置时的全局Y翻转）
-      const allY = payload.flatMap(c => (c.points || []).map(p => p[1]));
+      // 计算全局包围盒（用于放置时的全局Y翻转），同时考虑曲线与frame
+      const allYFromCurves = payload.flatMap(c => (c.points || []).map(p => p[1]));
+      const allYFromFrames = payload
+        .filter(item => item && item.type === 'frame' && typeof item.y === 'number' && typeof item.height === 'number')
+        .flatMap(f => [f.y, f.y + f.height]);
+      const allY = [...allYFromCurves, ...allYFromFrames];
       const globalMaxY = allY.length ? Math.max(...allY) : 0;
 
-      // 转换 Rhino 曲线数据为 Figma 矢量格式（翻转路径Y并按全局包围盒翻转放置Y）
+      // 转换 Rhino 数据为 Figma 友好格式（曲线转矢量，矩形转 FRAME），统一Y翻转
       const convertedShapes = payload.map((curve, index) => {
         if (curve.type === "curve" && curve.points) {
           // 计算边界框
@@ -141,6 +145,13 @@ watcher
             ? `${pathDataCore} Z`
             : `${pathDataCore}`;
 
+          // Normalize stroke width from payload (prefer Python-exported style.strokeWidth)
+          let strokeWidth = 0.5;
+          if (curve && curve.style && curve.style.strokeWidth !== undefined) {
+            const swNum = Number(curve.style.strokeWidth);
+            if (Number.isFinite(swNum)) strokeWidth = swNum;
+          }
+
           return {
             id: `curve-${index}`,
             name: `Curve ${index + 1}`,
@@ -159,11 +170,22 @@ watcher
                 b: 0
               }
             }],
-            strokeWeight: curve.style?.strokeWidth || 2,
+            strokeWeight: strokeWidth,
             vectorPaths: [{
               windingRule: "NONZERO",
               data: pathData
             }]
+          };
+        } else if (curve.type === 'frame' && typeof curve.x === 'number' && typeof curve.y === 'number') {
+          const maxY = curve.y + (curve.height || 0);
+          return {
+            id: `frame-${index}`,
+            name: curve.name || `Frame ${index + 1}`,
+            type: "FRAME",
+            x: curve.x || 0,
+            y: globalMaxY - maxY,
+            width: curve.width || 0,
+            height: curve.height || 0
           };
         }
         return null;
@@ -218,11 +240,18 @@ app.get("/figma-ready.json", (req, res) => {
     const data = fs.readFileSync(JSON_PATH, "utf8");
     const payload = JSON.parse(data);
     
-    // 计算全局包围盒（用于放置时的全局Y翻转）
-    const allY = payload.flatMap(c => (c.points || []).map(p => p[1]));
+    // 计算全局包围盒（用于放置时的全局Y翻转），同时考虑曲线、frame 与 text
+    const allYFromCurves = payload.flatMap(c => (c.points || []).map(p => p[1]));
+    const allYFromFrames = payload
+      .filter(item => item && item.type === 'frame' && typeof item.y === 'number' && typeof item.height === 'number')
+      .flatMap(f => [f.y, f.y + f.height]);
+    const allYFromTexts = payload
+      .filter(item => item && item.type === 'text' && typeof item.y === 'number')
+      .map(t => t.y);
+    const allY = [...allYFromCurves, ...allYFromFrames, ...allYFromTexts];
     const globalMaxY = allY.length ? Math.max(...allY) : 0;
 
-    // 转换 Rhino 曲线数据为 Figma 矢量格式（翻转路径Y并按全局包围盒翻转放置Y）
+    // 转换 Rhino 数据为 Figma 友好格式（曲线转矢量，矩形转 FRAME，文本转 TEXT），统一Y翻转
     const convertedShapes = payload.map((curve, index) => {
       if (curve.type === "curve" && curve.points) {
         // 计算边界框
@@ -256,6 +285,13 @@ app.get("/figma-ready.json", (req, res) => {
           ? `${pathDataCore} Z`
           : `${pathDataCore}`;
 
+        // Normalize stroke width from payload (prefer Python-exported style.strokeWidth)
+        let strokeWidth = 0.5;
+        if (curve && curve.style && curve.style.strokeWidth !== undefined) {
+          const swNum = Number(curve.style.strokeWidth);
+          if (Number.isFinite(swNum)) strokeWidth = swNum;
+        }
+
         return {
           id: `curve-${index}`,
           name: `Curve ${index + 1}`,
@@ -274,11 +310,44 @@ app.get("/figma-ready.json", (req, res) => {
               b: 0
             }
           }],
-          strokeWeight: curve.style?.strokeWidth || 2,
+          strokeWeight: strokeWidth,
           vectorPaths: [{
             windingRule: "NONZERO",
             data: pathData
-          }]
+          }],
+          // 传递父级 Frame 关系，用于前端嵌套
+          parentFrameId: curve.parentFrameId || null
+        };
+      } else if (curve.type === 'frame' && typeof curve.x === 'number' && typeof curve.y === 'number') {
+        const maxY = curve.y + (curve.height || 0);
+        return {
+          // 优先使用由导出脚本提供的稳定 ID
+          id: curve.id || `frame-${index}`,
+          name: curve.name || `Frame ${index + 1}`,
+          type: "FRAME",
+          x: curve.x || 0,
+          y: globalMaxY - maxY,
+          width: curve.width || 0,
+          height: curve.height || 0
+        };
+      } else if (curve.type === 'text' && typeof curve.x === 'number' && typeof curve.y === 'number') {
+        const r = Math.max(0, Math.min(255, (curve.color && curve.color.r) || 0)) / 255;
+        const g = Math.max(0, Math.min(255, (curve.color && curve.color.g) || 0)) / 255;
+        const b = Math.max(0, Math.min(255, (curve.color && curve.color.b) || 0)) / 255;
+        return {
+          id: `text-${index}`,
+          name: curve.text ? `Text: ${curve.text.substring(0, 24)}` : `Text ${index + 1}`,
+          type: 'TEXT',
+          x: curve.x || 0,
+          y: globalMaxY - (curve.y || 0),
+          text: curve.text || '',
+          font: {
+            family: (curve.font && curve.font.family) || 'Inter',
+            style: (curve.font && curve.font.style) || 'Regular'
+          },
+          fontSize: curve.fontSize || 12,
+          fills: [{ type: 'SOLID', color: { r, g, b } }],
+          parentFrameId: curve.parentFrameId || null
         };
       }
       return null;

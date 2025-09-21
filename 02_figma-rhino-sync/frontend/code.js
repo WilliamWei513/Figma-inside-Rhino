@@ -1,10 +1,10 @@
 // Figma Plugin Main Code - Rhino to Figma Sync
 const SERVER_URL = "http://localhost:4000";
 
-// 显示插件界面
+// Display plugin interface
 figma.showUI(__html__, { width: 320, height: 250 });
 
-// 处理来自UI的消息
+// Handle messages from UI
 figma.ui.onmessage = async (msg) => {
   if (msg.type === 'load-rhino-data') {
     await loadRhinoData();
@@ -15,78 +15,168 @@ figma.ui.onmessage = async (msg) => {
   }
 };
 
-// 从服务器加载Rhino数据
+// Load Rhino data from server
 async function loadRhinoData() {
   try {
-    figma.ui.postMessage({ type: 'loading', message: '正在从服务器加载数据...' });
+    figma.ui.postMessage({ type: 'loading', message: 'Loading data from server...' });
     
     const response = await fetch(`${SERVER_URL}/figma-ready.json`);
     if (!response.ok) {
-      throw new Error(`服务器响应错误: ${response.status}`);
+      throw new Error(`Server response error: ${response.status}`);
     }
     
     const data = await response.json();
-    console.log('从服务器加载的数据:', data);
+    console.log('Data loaded from server:', data);
     
     if (!data.shapes || data.shapes.length === 0) {
       figma.ui.postMessage({ 
         type: 'error', 
-        message: '服务器返回的数据中没有几何体' 
+        message: 'No geometries found in server response' 
       });
       return;
     }
     
-    // 清空当前画布上的Rhino图形
+    // Clear current Rhino shapes from canvas
     clearCanvas();
     
-    // 创建几何体
+    // Create geometries
     const createdShapes = [];
+    const createdFrames = {};
+    
+    // First create all frames
     data.shapes.forEach((shape, index) => {
-      const figmaShape = createFigmaShape(shape, index);
-      if (figmaShape) {
-        createdShapes.push(figmaShape);
+      if (shape.type === 'FRAME') {
+        const figmaShape = createFigmaShape(shape, index, createdFrames);
+        if (figmaShape) {
+          createdShapes.push(figmaShape);
+        }
       }
     });
     
-    // 选中所有创建的图形并缩放到视图
+    // Then create all vectors and texts, they will be placed in their parent frames
+    const textCreationPromises = [];
+    data.shapes.forEach((shape, index) => {
+      if (shape.type === 'VECTOR') {
+        const figmaShape = createFigmaShape(shape, index, createdFrames);
+        if (figmaShape) {
+          createdShapes.push(figmaShape);
+        }
+      } else if (shape.type === 'TEXT') {
+        const promise = createFigmaShape(shape, index, createdFrames);
+        if (promise) {
+          textCreationPromises.push(promise);
+        }
+      }
+    });
+
+    // Wait for all text nodes to finish creation (font loading)
+    const createdTextNodes = await Promise.all(textCreationPromises);
+    createdTextNodes.filter(Boolean).forEach(node => createdShapes.push(node));
+    
+    // Select all created shapes and zoom to view
     if (createdShapes.length > 0) {
       figma.currentPage.selection = createdShapes;
       figma.viewport.scrollAndZoomIntoView(createdShapes);
       
       figma.ui.postMessage({ 
         type: 'success', 
-        message: `✅ 成功创建 ${createdShapes.length} 个几何体！` 
+        message: `✅ Successfully created ${createdShapes.length} geometries!` 
       });
     } else {
       figma.ui.postMessage({ 
         type: 'error', 
-        message: '❌ 无法创建任何几何体' 
+        message: '❌ Unable to create any geometries' 
       });
     }
     
   } catch (error) {
-    console.error('加载Rhino数据时出错:', error);
+    console.error('Error loading Rhino data:', error);
     figma.ui.postMessage({ 
       type: 'error', 
-      message: `❌ 加载失败: ${error.message}` 
+      message: `❌ Loading failed: ${error.message}` 
     });
   }
 }
 
-// 创建Figma图形
-function createFigmaShape(shape, index) {
+// Create Figma shape
+function createFigmaShape(shape, index, createdFrames = {}) {
   try {
+    if (shape.type === 'FRAME') {
+      const frame = figma.createFrame();
+      frame.name = shape.name || `Frame ${index + 1}`;
+      frame.x = shape.x || 0;
+      frame.y = shape.y || 0;
+      frame.resize(Math.max(1, shape.width || 1), Math.max(1, shape.height || 1));
+      frame.fills = [{ type: 'SOLID', color: { r: 1, g: 1, b: 1 } }];
+      figma.currentPage.insertChild(0, frame);
+      
+      // Store the frame reference with its ID
+      if (shape.id) {
+        createdFrames[shape.id] = frame;
+      }
+      
+      return frame;
+    }
+    if (shape.type === 'TEXT') {
+      // Create text node
+      const textNode = figma.createText();
+      textNode.name = shape.name || `Text ${index + 1}`;
+      textNode.x = shape.x || 0;
+      textNode.y = shape.y || 0;
+      // Load font then set properties
+      const family = (shape.font && shape.font.family) || 'Inter';
+      const style = (shape.font && shape.font.style) || 'Regular';
+      const fontSize = shape.fontSize || 12;
+      const fills = shape.fills || [];
+
+      // Ensure font is loaded before setting characters
+      return figma.loadFontAsync({ family, style }).then(() => {
+        textNode.fontName = { family, style };
+        textNode.characters = shape.text || '';
+        textNode.fontSize = fontSize;
+        if (fills.length > 0) {
+          textNode.fills = fills;
+        }
+
+        // Parent handling
+        if (shape.parentFrameId && createdFrames[shape.parentFrameId]) {
+          createdFrames[shape.parentFrameId].appendChild(textNode);
+          const parentFrame = createdFrames[shape.parentFrameId];
+          textNode.x = (shape.x || 0) - parentFrame.x;
+          textNode.y = (shape.y || 0) - parentFrame.y;
+        } else {
+          figma.currentPage.appendChild(textNode);
+        }
+        return textNode;
+      }).catch(err => {
+        console.warn('Font load failed, fallback to default font:', err);
+        // Fallback: still set characters and color
+        textNode.characters = shape.text || '';
+        if (fills.length > 0) {
+          textNode.fills = fills;
+        }
+        if (shape.parentFrameId && createdFrames[shape.parentFrameId]) {
+          createdFrames[shape.parentFrameId].appendChild(textNode);
+          const parentFrame = createdFrames[shape.parentFrameId];
+          textNode.x = (shape.x || 0) - parentFrame.x;
+          textNode.y = (shape.y || 0) - parentFrame.y;
+        } else {
+          figma.currentPage.appendChild(textNode);
+        }
+        return textNode;
+      });
+    }
     if (shape.type === 'VECTOR' && shape.vectorPaths) {
-      // 创建矢量图形
+      // Create vector shape
       const vector = figma.createVector();
       vector.name = shape.name || `Rhino Shape ${index + 1}`;
       
-      // 设置位置和尺寸
+      // Set position and size
       vector.x = shape.x || 0;
       vector.y = shape.y || 0;
       vector.resize(shape.width || 100, shape.height || 100);
       
-      // 设置描边颜色
+      // Set stroke color
       if (shape.strokes && shape.strokes.length > 0) {
         const stroke = shape.strokes[0];
         if (stroke.type === 'SOLID' && stroke.color) {
@@ -101,16 +191,16 @@ function createFigmaShape(shape, index) {
         }
       }
       
-      // 设置线宽
+      // Set stroke weight
       if (shape.strokeWeight) {
         vector.strokeWeight = shape.strokeWeight;
       }
       
-      // 设置矢量路径
+      // Set vector paths
       if (shape.vectorPaths && shape.vectorPaths.length > 0) {
         const pathData = shape.vectorPaths[0];
         if (pathData.data) {
-          // 将SVG路径转换为Figma矢量路径
+          // Convert SVG path to Figma vector path
           const vectorPath = parseSVGPath(pathData.data);
           if (vectorPath) {
             vector.vectorPaths = [vectorPath];
@@ -118,21 +208,31 @@ function createFigmaShape(shape, index) {
         }
       }
       
-      // 添加到当前页面
-      figma.currentPage.appendChild(vector);
+      // Add to parent frame if it exists, otherwise add to current page
+      if (shape.parentFrameId && createdFrames[shape.parentFrameId]) {
+        createdFrames[shape.parentFrameId].appendChild(vector);
+        
+        // Adjust position relative to parent frame
+        const parentFrame = createdFrames[shape.parentFrameId];
+        vector.x = vector.x - parentFrame.x;
+        vector.y = vector.y - parentFrame.y;
+      } else {
+        figma.currentPage.appendChild(vector);
+      }
+      
       return vector;
     }
   } catch (error) {
-    console.error('创建图形时出错:', error);
+    console.error('Error creating shape:', error);
     return null;
   }
 }
 
-// 解析SVG路径为Figma矢量路径
+// Parse SVG path to Figma vector path
 function parseSVGPath(pathData) {
   try {
-    // 简化的SVG路径解析
-    // 这里我们创建一个基本的路径结构
+    // Simplified SVG path parsing
+    // Create a basic path structure
     const vectorPath = {
       windingRule: "NONZERO",
       data: pathData
@@ -140,25 +240,29 @@ function parseSVGPath(pathData) {
     
     return vectorPath;
   } catch (error) {
-    console.error('解析SVG路径时出错:', error);
+    console.error('Error parsing SVG path:', error);
     return null;
   }
 }
 
-// 清空画布上的Rhino图形
+// Clear all shapes and frames from canvas
 function clearCanvas() {
   const currentPage = figma.currentPage;
   const children = [...currentPage.children];
   
-  // 删除所有Rhino相关的图形
+  // Remove all shapes and frames
   children.forEach(child => {
-    if (child.name.startsWith('Rhino Shape') || 
+    // Remove all frames and Rhino-related shapes
+    if (child.type === 'FRAME' || 
+        child.name.startsWith('Rhino Shape') || 
         child.name.startsWith('Curve') ||
+        child.name.startsWith('Text') ||
+        child.type === 'TEXT' ||
         child.name.includes('Rhino')) {
       child.remove();
     }
   });
 }
 
-// 插件启动时的初始化
-console.log('🦏 Rhino to Figma Sync Plugin 已加载');
+// Plugin initialization
+console.log('🦏 Rhino to Figma Sync Plugin loaded');
